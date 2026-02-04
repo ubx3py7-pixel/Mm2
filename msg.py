@@ -12,15 +12,21 @@ MOBILE_UA = "Mozilla/5.0 (Linux; Android 13; vivo V60) AppleWebKit/537.36 (KHTML
 MOBILE_VIEWPORT = {"width": 412, "height": 915}  # Typical Android phone size
 
 LAUNCH_ARGS = [
-    "--disable-dev-shm-usage",
-    "--no-sandbox",
-    "--disable-gpu",
-    "--disable-extensions",
-    "--disable-sync",
-    "--disable-background-networking",
-    "--disable-background-timer-throttling",
-    "--disable-renderer-backgrounding",
-    "--mute-audio",
+    '--disable-blink-features=AutomationControlled',
+    '--disable-infobars',
+    '--disable-dev-shm-usage',
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-gpu',
+    '--disable-features=IsolateOrigins,site-per-process',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-extensions',
+    '--disable-default-apps',
+    '--mute-audio',
+    '--lang=en-US,en',
+    '--start-maximized'
 ]
 
 def sanitize_input(raw):
@@ -143,6 +149,25 @@ async def login(args, storage_path, headless):
         print(f"Unexpected login error: {e}")
         return False
 
+async def init_page(page, url, dm_selector):
+    """
+    Initialize a single page by navigating to the URL with retries.
+    Returns True if successful, False otherwise.
+    """
+    init_success = False
+    for init_try in range(3):
+        try:
+            await page.goto("https://www.instagram.com/", timeout=60000)
+            await page.goto(url, timeout=60000)
+            await page.wait_for_selector(dm_selector, timeout=30000)
+            init_success = True
+            break
+        except Exception as init_e:
+            print(f"Tab for {url[:30]}... try {init_try+1}/3 failed: {init_e}")
+            if init_try < 2:
+                await asyncio.sleep(2)
+    return init_success
+
 async def sender(tab_id, args, messages, context, page):
     """
     Async sender coroutine: Cycles through messages in an infinite loop, preloading/reloading pages every 60s to avoid issues.
@@ -207,13 +232,18 @@ async def main():
     parser = argparse.ArgumentParser(description="Instagram DM Auto Sender using Playwright")
     parser.add_argument('--username', required=False, help='Instagram username (required for initial login)')
     parser.add_argument('--password', required=False, help='Instagram password (required for initial login)')
-    parser.add_argument('--thread-url', required=True, help='Full Instagram direct thread URL')
+    parser.add_argument('--thread-url', required=True, help='Full Instagram direct thread URLs (comma-separated for multiple)')
     parser.add_argument('--names', nargs='+', required=True, help='Messages list, direct string, or .txt file (split on & or "and" for multiple; preserves newlines for art)')
     parser.add_argument('--headless', default='true', choices=['true', 'false'], help='Run in headless mode (default: true)')
     parser.add_argument('--storage-state', required=True, help='Path to JSON file for login state (persists session)')
-    parser.add_argument('--tabs', type=int, default=1, help='Number of parallel tabs (1-5, default 1)')
+    parser.add_argument('--tabs', type=int, default=1, help='Number of parallel tabs per thread URL (1-5, default 1)')
     args = parser.parse_args()
     args.names = sanitize_input(args.names)  # Handle bot/shell-truncated inputs
+
+    thread_urls = [u.strip() for u in args.thread_url.split(',') if u.strip()]
+    if not thread_urls:
+        print("Error: No valid thread URLs provided.")
+        return
 
     headless = args.headless == 'true'  
     storage_path = args.storage_state  
@@ -242,6 +272,8 @@ async def main():
     print(f"Parsed {len(messages)} messages.")  
 
     tabs = min(max(args.tabs, 1), 5)  
+    total_tabs = len(thread_urls) * tabs
+    print(f"Using {tabs} tabs per URL across {len(thread_urls)} URLs (total: {total_tabs} tabs).")  
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -278,30 +310,29 @@ async def main():
                     await asyncio.gather(*tasks, return_exceptions=True)
                 tasks = []
 
-                # Create new pages
-                for i in range(tabs):
-                    page = await context.new_page()
-                    init_success = False
-                    for init_try in range(3):
-                        try:
-                            await page.goto("https://www.instagram.com/", timeout=60000)
-                            await page.goto(args.thread_url, timeout=60000)
-                            await page.wait_for_selector(dm_selector, timeout=30000)
-                            init_success = True
-                            break
-                        except Exception as init_e:
-                            print(f"Tab {i+1} init try {init_try+1}/3 failed: {init_e}")
-                            if init_try < 2:
-                                await asyncio.sleep(2)
-                    if not init_success:
-                        print(f"Tab {i+1} failed to initialize after 3 tries, skipping.")
+                # Create all pages first
+                page_urls = []
+                for url in thread_urls:
+                    for i in range(tabs):
+                        page = await context.new_page()
+                        page_urls.append((page, url))
+
+                # Initialize all pages concurrently
+                init_tasks = [asyncio.create_task(init_page(page, url, dm_selector)) for page, url in page_urls]
+                init_results = await asyncio.gather(*init_tasks, return_exceptions=True)
+
+                # Filter successful initializations
+                for idx, result in enumerate(init_results):
+                    page, url = page_urls[idx]
+                    if isinstance(result, Exception) or not result:
+                        print(f"Tab for {url} failed to initialize after 3 tries, skipping.")
                         try:
                             await page.close()
                         except:
                             pass
-                        continue
-                    pages.append(page)
-                    print(f"Tab {len(pages)} ready.")
+                    else:
+                        pages.append(page)
+                        print(f"Tab {len(pages)} ready for {url[:50]}...")
 
                 if not pages:
                     print("No tabs could be initialized, exiting.")
