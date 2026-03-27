@@ -175,7 +175,7 @@ async def sender(tab_id, args, messages, context, page):
     Uses shared context to create new pages for reloading.
     Enhanced with retry logic: If selector not visible or send fails, retry up to 2 times (press Enter to clear if stuck, then refill), skip if all retries fail, never crash.
     """
-    dm_selector = 'div[role="textbox"][aria-label="Message"]'
+    dm_selector =  '[contenteditable="true"][role="textbox"]' 
     print(f"Tab {tab_id} ready, starting infinite message loop.")
     current_page = page
     cycle_start = time.time()
