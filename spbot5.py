@@ -785,12 +785,12 @@ PLO_USERNAME, PLO_PASSWORD = range(2)
 SLOG_SESSION, SLOG_USERNAME = range(2)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("Welcome to Spyther's spam bot ⚡ type /help to see available commands")
+    await update.message.reply_text("Welcome to Baby's spam bot ⚡ type /help to see available commands")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if not is_authorized(user_id):
-        await update.message.reply_text("⚠️ You are not authorised to use, dm owner to gain access! @spyther ⚠️")
+        await update.message.reply_text("⚠️ You are not authorised to use, dm owner to gain access! Baby ⚠️")
         return
     help_text = """
 🌟 Available commands: 🌟
